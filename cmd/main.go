@@ -12,47 +12,13 @@ import (
 	"time"
 )
 
-type Jira struct {
-	Issue       string `json:"issue"`
-	Description string `json:"description"`
-}
-
 func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ltime | log.Lshortfile)
 
 	ws := websock.NewServer(os.Stdout, log.Ltime|log.Lmsgprefix)
-
-	jiras := map[string]*Jira{}
-
-	go func() {
-		for {
-			for _, j := range jiras {
-				time.Sleep(5 * time.Second)
-				j.Description = fmt.Sprintf("%s - %d", j.Issue, time.Now().Unix())
-				ws.Publish(fmt.Sprintf("jira.%s", j.Issue), "jira", j)
-			}
-		}
-	}()
-
-	ws.HandleFunc("jira.get", func(req websock.Request) error {
-		var issue string
-		if req.Unpack(&issue) {
-			if strings.HasPrefix(issue, "foobar") {
-				return errors.New("unknown issue: " + issue)
-			}
-
-			if _, ok := jiras[issue]; !ok {
-				jiras[issue] = &Jira{
-					Issue:       issue,
-					Description: "do work",
-				}
-			}
-			time.Sleep(250 * time.Millisecond)
-			req.Client.Write(req.Channel, "jira", jiras[issue])
-		}
-		return nil
-	})
+	ws.HandleFunc("jira.get", jiraGet)
+	go backgroundJiraDemo(ws)
 
 	http.HandleFunc("/", debugInfo(ws))
 	http.HandleFunc("/ws", ws.HandleWS)
@@ -113,4 +79,40 @@ table tr th {
 		}
 		fmt.Fprintln(w, "</html></body>")
 	}
+}
+
+type Jira struct {
+	Issue       string `json:"issue"`
+	Description string `json:"description"`
+}
+
+var jiras = map[string]*Jira{}
+
+func backgroundJiraDemo(ws *websock.Server) {
+	for {
+		for _, j := range jiras {
+			time.Sleep(5 * time.Second)
+			j.Description = fmt.Sprintf("%s - %d", j.Issue, time.Now().Unix())
+			ws.Publish(fmt.Sprintf("jira.%s", j.Issue), "jira", j)
+		}
+	}
+}
+
+func jiraGet(req websock.Request) error {
+	var issue string
+	if req.Unpack(&issue) {
+		if strings.HasPrefix(issue, "foobar") {
+			return errors.New("unknown issue: " + issue)
+		}
+
+		if _, ok := jiras[issue]; !ok {
+			jiras[issue] = &Jira{
+				Issue:       issue,
+				Description: "do work",
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+		req.Client.Write(req.Channel, "jira", jiras[issue])
+	}
+	return nil
 }
