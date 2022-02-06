@@ -34,14 +34,14 @@ func (c *Client) write(channel string, t string, body interface{}) {
 	ch, ok := c.channels[channel]
 	if ok {
 		ch.IncrementSent()
-
 		resp := Message{
 			Channel: channel,
 			Type:    t,
 			Body:    body,
 		}
+		ch.log.Send(resp)
+
 		c.w.Reset(c.conn, c.state, ws.OpText)
-		c.log.Send(resp)
 		if err := c.enc.Encode(resp); err != nil {
 			c.log.Err.Println("unable to encode", body)
 		}
@@ -87,7 +87,7 @@ func (c *Client) newChannel(id string) *Channel {
 	ch := &Channel{
 		Id:    id,
 		Stats: &Stats{},
-		log:   NewLog(c.server.log.Writer, c.server.log.Flags, id, id),
+		log:   NewLog(c.server.log.Writer, c.server.log.Flags, c.id, id),
 	}
 	c.channels[id] = ch
 	return ch
@@ -118,7 +118,7 @@ func (c *Client) nextFrame() error {
 		channel = c.newChannel(req.Channel)
 	}
 	channel.IncrementRecv()
-	c.log.Recv(req.Message)
+	channel.log.Recv(req.Message)
 	if err := c.handle(req.Message, req.Body); err != nil {
 		return err
 	}
@@ -149,4 +149,10 @@ func (c *Client) MarshalJSON() ([]byte, error) {
 	}
 	data["channels"] = channels
 	return json.Marshal(data)
+}
+
+func (c *Client) closeChannel(channel string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	delete(c.channels, channel)
 }

@@ -16,8 +16,10 @@ func NewServer(out io.Writer, logFlags int) *Server {
 		CentralLock: &CentralLocking{},
 		clients:     map[string]*Client{},
 		protoHandlers: map[string]MessageHandler{
-			"open":  nil,
-			"close": nil,
+			"open": nil,
+			"close": func(req Request, rw *ResponseWriter) {
+				req.client.closeChannel(req.channel)
+			},
 			"subscribe": func(req Request, rw *ResponseWriter) {
 				var topic string
 				if req.Unpack(&topic) {
