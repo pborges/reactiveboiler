@@ -16,22 +16,24 @@ func NewServer(out io.Writer, logFlags int) *Server {
 		},
 		log: NewLog(out, logFlags, "", ""),
 	}
-	s.HandleFunc("subscribe", func(req Request) error {
+	s.HandleFunc("subscribe", func(req Request, rw *ResponseWriter) error {
 		var topic string
 		if req.Unpack(&topic) {
-			req.Client.lock.Lock()
-			req.Client.channels[req.Channel].Subscriptions = append(req.Client.channels[req.Channel].Subscriptions, topic)
-			req.Client.lock.Unlock()
+			client := req.server.clients.Get(req.Client)
+			client.lock.Lock()
+			client.channels[req.Channel].Subscriptions = append(client.channels[req.Channel].Subscriptions, topic)
+			client.lock.Unlock()
 		}
 		return nil
 	})
-	s.HandleFunc("open", func(req Request) error {
+	s.HandleFunc("open", func(req Request, rw *ResponseWriter) error {
 		return nil
 	})
-	s.HandleFunc("close", func(req Request) error {
-		req.Client.lock.Lock()
-		delete(req.Client.channels, req.Channel)
-		req.Client.lock.Unlock()
+	s.HandleFunc("close", func(req Request, rw *ResponseWriter) error {
+		client := req.server.clients.Get(req.Client)
+		client.lock.Lock()
+		delete(client.channels, req.Channel)
+		client.lock.Unlock()
 		return nil
 	})
 	return &s
@@ -56,8 +58,14 @@ func (s *Server) Clients() []*Client {
 
 func (s *Server) Write(client string, channel string, t string, body interface{}) {
 	if c := s.clients.Get(client); c != nil {
-		c.Write(channel, t, body)
+		c.lock.Lock()
+		c.write(channel, t, body)
+		defer c.lock.Unlock()
 	}
+}
+
+func (s *Server) WriteError(client string, channel string, err error) {
+	s.Write(client, channel, "error", err.Error())
 }
 
 func (s *Server) Publish(topic string, t string, body interface{}) {

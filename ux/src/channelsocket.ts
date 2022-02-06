@@ -66,7 +66,7 @@ class Socket {
     private drain() {
         if (this.ws.readyState === WebSocket.OPEN) {
             this.queue.forEach((m: Message) => {
-                const msg = JSON.stringify({...m, client: this.id})
+                const msg = JSON.stringify(m)
                 if (m.channel) {
                     this.channels.filter((ch) => ch.id === m.channel)
                         .forEach((ch) => {

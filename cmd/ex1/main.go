@@ -98,7 +98,7 @@ func backgroundJiraDemo(ws *websock.Server) {
 	}
 }
 
-func jiraGet(req websock.Request) error {
+func jiraGet(req websock.Request, rw *websock.ResponseWriter) error {
 	var issue string
 	if req.Unpack(&issue) {
 		if strings.HasPrefix(issue, "foobar") {
@@ -112,7 +112,7 @@ func jiraGet(req websock.Request) error {
 			}
 		}
 		time.Sleep(250 * time.Millisecond)
-		req.Client.Write(req.Channel, "jira", jiras[issue])
+		rw.Write(req.Client, req.Channel, "jira", jiras[issue])
 	}
 	return nil
 }

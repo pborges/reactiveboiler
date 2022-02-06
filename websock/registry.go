@@ -55,16 +55,22 @@ func (reg *HandlerRegistry) Handle(c *Client, msg Message, body []byte) {
 	defer reg.lock.Unlock()
 	fn, ok := reg.db[msg.Type]
 	if ok {
-		if err := fn(Request{
-			Client:  c,
-			Channel: msg.Channel,
-			Type:    msg.Type,
-			Raw:     body,
-		}); err != nil {
-			c.Error(msg.Channel, err)
+		if err := fn(
+			Request{
+				Client:  c.id,
+				Channel: msg.Channel,
+				Type:    msg.Type,
+				Raw:     body,
+				server:  c.server,
+			},
+			&ResponseWriter{
+				server: c.server,
+			},
+		); err != nil {
+			c.server.WriteError(c.id, msg.Channel, err)
 		}
 	} else {
-		c.Error(msg.Channel, errors.New("unknown type: "+msg.Type))
+		c.server.WriteError(c.id, msg.Channel, errors.New("unknown type: "+msg.Type))
 	}
 }
 

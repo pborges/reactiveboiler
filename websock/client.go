@@ -106,22 +106,6 @@ func (c *Client) Handle() {
 	}
 }
 
-func (c *Client) Error(ch string, err error) {
-	channel, ok := c.channels[ch]
-	if ok {
-		channel.log.Err.Println(err)
-	} else {
-		c.log.Err.Println(err)
-	}
-	c.Write(ch, "error", err.Error())
-}
-
-func (c *Client) Write(channel string, t string, body interface{}) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.write(channel, t, body)
-}
-
 func (c *Client) write(channel string, t string, body interface{}) {
 	msg := Message{
 		Client:  c.id,
