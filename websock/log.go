@@ -47,11 +47,7 @@ func (l Log) Send(m Message) {
 	if m.Body != nil {
 		buf, _ = json.Marshal(m.Body)
 	}
-	if protocolTypes.Contains(m.Type) {
-		l.Info.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
-	} else {
-		l.send.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
-	}
+	l.send.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
 }
 
 func (l Log) Recv(m Message) {
@@ -59,9 +55,5 @@ func (l Log) Recv(m Message) {
 	if m.Body != nil {
 		buf, _ = json.Marshal(m.Body)
 	}
-	if protocolTypes.Contains(m.Type) {
-		l.Info.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
-	} else {
-		l.recv.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
-	}
+	l.recv.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
 }

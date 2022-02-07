@@ -2,130 +2,148 @@ package websock
 
 import (
 	"encoding/json"
-	"github.com/gorilla/websocket"
-	"sync"
-	"time"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
+	"io"
+	"net"
 )
 
-type StringArray []string
-
-func (sa StringArray) Contains(str string) bool {
-	for _, s := range sa {
-		if s == str {
-			return true
-		}
-	}
-	return false
-}
-
-var protocolTypes StringArray = []string{"open", "close"}
-
 type Client struct {
-	server   *Server
 	id       string
-	conn     *websocket.Conn
-	lock     *sync.Mutex
-	channels map[string]*Channel
+	server   *Server
+	conn     net.Conn
+	r        *wsutil.Reader
+	w        *wsutil.Writer
+	enc      *json.Encoder
+	dec      *json.Decoder
 	log      *Log
-	Stats    Stats `json:"stats"`
+	channels map[string]*Channel
+	lock     *Lock
+	iolock   *Lock
 }
 
-func (c Client) Channels() []*Channel {
-	res := make([]*Channel, 0, len(c.channels))
-	for _, v := range c.channels {
-		res = append(res, v)
-	}
-	return res
+func (c *Client) error(channel string, err error) {
+	c.write(channel, "error", err.Error())
 }
-
-func (c Client) Id() string {
-	return c.id
-}
-
-func (c Client) MarshalJSON() ([]byte, error) {
-	type alias Client
-	a := struct {
-		alias
-		Id       string    `json:"id"`
-		Channels []Channel `json:"channels,omitempty"`
-	}{
-		alias: alias(c),
-		Id:    c.id,
-	}
-	for _, s := range c.Channels() {
-		a.Channels = append(a.Channels, *s)
-	}
-	return json.Marshal(a)
-}
-
-func (c *Client) Handle() {
-	c.log.Info.Println("open")
-	defer func() {
-		c.log.Info.Println("close")
-	}()
-
-	for {
-		_, buff, err := c.conn.ReadMessage()
-		if err != nil {
-			c.log.Err.Println("read error", err)
-			return
-		}
-
-		msg := struct {
-			Message
-			Body json.RawMessage `json:"body"`
-		}{}
-		if err := json.Unmarshal(buff, &msg); err != nil {
-			c.log.Err.Println("unable to unmarshal", err)
-			continue
-		}
-		if len(msg.Body) > 0 {
-			msg.Message.Body = msg.Body
-		}
-
-		c.Stats.IncrementRecv()
-
-		if _, ok := c.channels[msg.Channel]; !ok {
-			// create new channel
-			c.lock.Lock()
-			c.channels[msg.Channel] = &Channel{
-				id: msg.Channel,
-				Stats: Stats{
-					LastSent:     time.Now(),
-					LastReceived: time.Now(),
-				},
-				log: NewLog(c.log.Writer, c.log.Flags, c.id, msg.Channel),
-			}
-			c.lock.Unlock()
-		}
-
-		c.channels[msg.Channel].log.Recv(msg.Message)
-		c.channels[msg.Channel].Stats.IncrementRecv()
-
-		go c.server.handlers.Handle(c, msg.Message, msg.Body)
-	}
-}
-
 func (c *Client) write(channel string, t string, body interface{}) {
-	msg := Message{
-		Client:  c.id,
-		Channel: channel,
-		Type:    t,
-		Body:    body,
-	}
+	c.iolock.Lock()
+	defer c.iolock.Unlock()
 
 	ch, ok := c.channels[channel]
-	if !ok {
-		c.log.Err.Println("unregistered channel", channel)
-		return
-	}
+	if ok {
+		ch.IncrementSent()
+		resp := Message{
+			Channel: channel,
+			Type:    t,
+			Body:    body,
+		}
+		ch.log.Send(resp)
 
-	ch.log.Send(msg)
-
-	if err := c.conn.WriteJSON(msg); err == nil {
-		c.Stats.IncrementSent()
-		ch.Stats.IncrementSent()
+		c.w.Reset(c.conn, ws.StateServerSide, ws.OpText)
+		if err := c.enc.Encode(resp); err == nil {
+			if err := c.w.Flush(); err != nil {
+				c.log.Err.Println("unable to flush")
+			}
+		} else {
+			c.log.Err.Println("unable to encode", body)
+		}
 	} else {
-		ch.log.Err.Println("write error", err)
+		c.log.Info.Println("unknown channel", channel)
 	}
+}
+
+func (c *Client) handleAndDispatch(req Message, buf []byte) error {
+	c.server.handlersLock.RLock()
+	defer c.server.handlersLock.RUnlock()
+
+	fn, ok := c.server.protoHandlers[req.Type]
+	if !ok {
+		fn, ok = c.server.handlers[req.Type]
+	}
+
+	if ok {
+		if fn != nil {
+			r := Request{
+				client:  c,
+				channel: req.Channel,
+				Raw:     buf,
+			}
+			rw := &ResponseWriter{
+				client:  c,
+				channel: req.Channel,
+			}
+			fn(r, rw)
+		}
+	} else {
+		c.log.Err.Println("unknown type", req.Type)
+	}
+	return nil
+}
+
+func (c *Client) newChannel(id string) *Channel {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	ch := &Channel{
+		Id:    id,
+		Stats: &Stats{},
+		log:   NewLog(c.server.log.Writer, c.server.log.Flags, c.id, id),
+	}
+	c.channels[id] = ch
+	return ch
+}
+
+func (c *Client) nextFrame() error {
+	hdr, err := c.r.NextFrame()
+	if err != nil {
+		return err
+	}
+
+	if hdr.OpCode == ws.OpClose {
+		return io.EOF
+	}
+
+	req := struct {
+		Message
+		Body json.RawMessage `json:"body"`
+	}{}
+	if err := c.dec.Decode(&req); err != nil {
+		return err
+	}
+	channel, ok := c.channels[req.Channel]
+	if !ok {
+		channel = c.newChannel(req.Channel)
+	}
+	channel.IncrementRecv()
+	if len(req.Body) > 0 {
+		req.Message.Body = req.Body
+	}
+	channel.log.Recv(req.Message)
+
+	return c.handleAndDispatch(req.Message, req.Body)
+}
+
+func (c *Client) subscribe(channel string, topic string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	c.channels[channel].Subscriptions = append(c.channels[channel].Subscriptions, topic)
+}
+
+func (c *Client) MarshalJSON() ([]byte, error) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	data := map[string]interface{}{}
+	channels := make([]*Channel, 0, len(c.channels))
+	for _, ch := range c.channels {
+		channels = append(channels, ch)
+	}
+	data["channels"] = channels
+	return json.Marshal(data)
+}
+
+func (c *Client) closeChannel(channel string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	delete(c.channels, channel)
 }

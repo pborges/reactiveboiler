@@ -1,75 +1,166 @@
 package websock
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 	"io"
+	"net"
 	"net/http"
-	"sync"
 )
 
 func NewServer(out io.Writer, logFlags int) *Server {
-	s := Server{
-		handlers: HandlerRegistry{
-			db: map[string]TypeHandlerFunc{},
+	srv := &Server{
+		CentralLock: &CentralLocking{},
+		clients:     map[string]*Client{},
+		protoHandlers: map[string]MessageHandler{
+			"open": nil,
+			"close": func(req Request, rw *ResponseWriter) {
+				req.client.closeChannel(req.channel)
+			},
+			"subscribe": func(req Request, rw *ResponseWriter) {
+				var topic string
+				if req.Unpack(&topic) {
+					req.client.subscribe(req.channel, topic)
+				}
+			},
 		},
-		clients: ClientRegistry{
-			db: map[string]*Client{},
-		},
-		log: NewLog(out, logFlags, "", ""),
+		handlers: map[string]MessageHandler{},
+		log:      NewLog(out, logFlags, "", ""),
 	}
-	s.HandleFunc("subscribe", func(req Request, rw *ResponseWriter) error {
-		var topic string
-		if req.Unpack(&topic) {
-			client := req.server.clients.Get(req.Client)
-			client.lock.Lock()
-			client.channels[req.Channel].Subscriptions = append(client.channels[req.Channel].Subscriptions, topic)
-			client.lock.Unlock()
-		}
-		return nil
-	})
-	s.HandleFunc("open", func(req Request, rw *ResponseWriter) error {
-		return nil
-	})
-	s.HandleFunc("close", func(req Request, rw *ResponseWriter) error {
-		client := req.server.clients.Get(req.Client)
-		client.lock.Lock()
-		delete(client.channels, req.Channel)
-		client.lock.Unlock()
-		return nil
-	})
-	return &s
+	srv.clientsLock = srv.CentralLock.CreateLock("server.clients")
+	srv.handlersLock = srv.CentralLock.CreateLock("server.handlers")
+	return srv
 }
 
 type Server struct {
-	handlers HandlerRegistry
-	clients  ClientRegistry
-	log      *Log
-	lock     sync.Mutex
+	clients       map[string]*Client
+	clientsLock   *Lock
+	protoHandlers map[string]MessageHandler
+	handlers      map[string]MessageHandler
+	handlersLock  *Lock
+	CentralLock   *CentralLocking
+	log           *Log
 }
 
-func (s *Server) HandleFunc(t string, fn TypeHandlerFunc) {
-	if err := s.handlers.Set(t, fn); err != nil {
-		panic(err)
+func (srv *Server) MarshalJSON() ([]byte, error) {
+	srv.clientsLock.RLock()
+	srv.handlersLock.RLock()
+	defer func() {
+		srv.clientsLock.RUnlock()
+		srv.handlersLock.RUnlock()
+	}()
+
+	clients := map[string]interface{}{}
+	for _, c := range srv.clients {
+		clients[c.id] = c
+	}
+	return json.Marshal(clients)
+}
+
+func (srv *Server) newClient(id string, conn net.Conn) *Client {
+	srv.clientsLock.Lock()
+	defer srv.clientsLock.Unlock()
+
+	client := &Client{
+		server:   srv,
+		id:       id,
+		r:        wsutil.NewReader(conn, ws.StateServerSide),
+		w:        wsutil.NewWriter(conn, ws.StateServerSide, ws.OpText),
+		conn:     conn,
+		channels: map[string]*Channel{},
+		iolock:   srv.CentralLock.CreateLock(id + ".io"),
+		lock:     srv.CentralLock.CreateLock(id),
+		log:      NewLog(srv.log.Writer, srv.log.Flags, id, ""),
+	}
+	client.enc = json.NewEncoder(client.w)
+	client.dec = json.NewDecoder(client.r)
+	srv.clients[id] = client
+	srv.log.Info.Println("open client", id)
+	return client
+}
+
+func (srv *Server) deleteClient(id string) {
+	srv.clientsLock.Lock()
+	defer srv.clientsLock.Unlock()
+
+	srv.log.Info.Println("close client", id)
+	delete(srv.clients, id)
+	srv.CentralLock.Delete(id)
+	srv.CentralLock.Delete(id + ".io")
+}
+
+func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
+	conn, _, _, err := ws.UpgradeHTTP(r, w)
+	if err != nil {
+		srv.log.Err.Println("unable to upgrade client", err)
+		return
+	}
+
+	defer conn.Close()
+
+	msg, _, err := wsutil.ReadClientData(conn)
+	if err != nil {
+		srv.log.Err.Println("unable to read initial frame", err)
+		return
+	}
+	id := string(msg)
+
+	client := srv.newClient(
+		id,
+		conn,
+	)
+
+	defer srv.deleteClient(id)
+
+	for {
+		if err = client.nextFrame(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				srv.log.Err.Println(err)
+			}
+			return
+		}
 	}
 }
 
-func (s *Server) Clients() []*Client {
-	return s.clients.List()
+// HandleDebug sucks and really needs to be fixed
+func (srv *Server) HandleDebug(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	enc := json.NewEncoder(w)
+
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(srv); err != nil {
+		fmt.Fprintln(w, err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
-func (s *Server) Write(client string, channel string, t string, body interface{}) {
-	if c := s.clients.Get(client); c != nil {
-		c.lock.Lock()
+func (srv *Server) Write(client string, channel string, t string, body interface{}) {
+	srv.clientsLock.RLock()
+	defer srv.clientsLock.RUnlock()
+
+	if c, ok := srv.clients[client]; ok {
+		srv.clientsLock.RLock()
 		c.write(channel, t, body)
-		defer c.lock.Unlock()
+		srv.clientsLock.RUnlock()
 	}
 }
 
-func (s *Server) WriteError(client string, channel string, err error) {
-	s.Write(client, channel, "error", err.Error())
+func (srv *Server) Handle(t string, fn MessageHandler) {
+	srv.handlersLock.Lock()
+	defer srv.handlersLock.Unlock()
+
+	srv.handlers[t] = fn
 }
 
-func (s *Server) Publish(topic string, t string, body interface{}) {
-	for _, client := range s.Clients() {
+func (srv *Server) Publish(topic string, t string, body interface{}) {
+	srv.clientsLock.RLock()
+	defer srv.clientsLock.RUnlock()
+
+	for _, client := range srv.clients {
+		client.lock.RLock()
 		for chName, ch := range client.channels {
 			for _, sub := range ch.Subscriptions {
 				if sub == topic {
@@ -77,40 +168,6 @@ func (s *Server) Publish(topic string, t string, body interface{}) {
 				}
 			}
 		}
+		client.lock.RUnlock()
 	}
-}
-
-func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		s.log.Err.Println("unable to upgrade", err)
-		return
-	}
-
-	defer func() {
-		conn.Close()
-	}()
-
-	_, buff, err := conn.ReadMessage()
-	if err != nil {
-		s.log.Err.Println("unable to read hello message", err)
-		return
-	}
-
-	client := &Client{
-		id:       string(buff),
-		conn:     conn,
-		lock:     new(sync.Mutex),
-		channels: map[string]*Channel{},
-		server:   s,
-		log:      NewLog(s.log.Writer, s.log.Flags, string(buff), ""),
-	}
-
-	s.clients.Set(client)
-
-	defer func() {
-		s.clients.Delete(client.id)
-	}()
-
-	client.Handle()
 }

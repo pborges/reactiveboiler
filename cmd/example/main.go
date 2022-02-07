@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pborges/reactiveboiler/websock2"
+	"github.com/pborges/reactiveboiler/websock"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -18,7 +18,7 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ltime | log.Lshortfile)
 
-	srv := websock2.NewServer(log.Writer(), log.Flags())
+	srv := websock.NewServer(log.Writer(), log.Flags())
 	//srv.CentralLock.Log = log.Default()
 
 	srv.Handle("jira.get", jiraGet)
@@ -42,7 +42,11 @@ type Jira struct {
 var jiras = map[string]*Jira{}
 var lock sync.Mutex
 
-func backgroundJiraDemo(ws *websock2.Server) {
+func backgroundJiraDemo(ws *websock.Server) {
+	http.HandleFunc("x", func(writer http.ResponseWriter, request *http.Request) {
+
+	})
+
 	for {
 		time.Sleep(5 * time.Second)
 		lock.Lock()
@@ -54,7 +58,7 @@ func backgroundJiraDemo(ws *websock2.Server) {
 	}
 }
 
-func jiraGet(req websock2.Request, rw *websock2.ResponseWriter) {
+func jiraGet(req websock.Request, rw *websock.ResponseWriter) {
 	var issue string
 	if req.Unpack(&issue) {
 		if strings.HasPrefix(issue, "foobar") {

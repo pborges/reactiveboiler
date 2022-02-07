@@ -1,28 +1,18 @@
 package websock
 
-import (
-	"encoding/json"
-)
+import "encoding/json"
 
 type Channel struct {
-	id            string
-	Stats         Stats    `json:"stats"`
-	Subscriptions []string `json:"subscriptions,omitempty"`
-	log           *Log
+	Id            string
+	Subscriptions []string
+	*Stats
+	log *Log
 }
 
-func (s Channel) Id() string {
-	return s.id
-}
-
-func (s Channel) MarshalJSON() ([]byte, error) {
-	type alias Channel
-	a := struct {
-		alias
-		Id string `json:"id"`
-	}{
-		alias: alias(s),
-		Id:    s.id,
-	}
-	return json.Marshal(a)
+func (ch *Channel) MarshalJSON() ([]byte, error) {
+	data := map[string]interface{}{}
+	data["id"] = ch.Id
+	data["subscriptions"] = ch.Subscriptions
+	data["stats"] = ch.Stats
+	return json.Marshal(data)
 }
