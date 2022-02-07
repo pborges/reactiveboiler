@@ -70,7 +70,6 @@ func (srv *Server) newClient(id string, conn net.Conn) *Client {
 		r:        wsutil.NewReader(conn, ws.StateServerSide),
 		w:        wsutil.NewWriter(conn, ws.StateServerSide, ws.OpText),
 		conn:     conn,
-		state:    ws.StateServerSide,
 		channels: map[string]*Channel{},
 		iolock:   srv.CentralLock.CreateLock(id + ".io"),
 		lock:     srv.CentralLock.CreateLock(id),
@@ -79,7 +78,7 @@ func (srv *Server) newClient(id string, conn net.Conn) *Client {
 	client.enc = json.NewEncoder(client.w)
 	client.dec = json.NewDecoder(client.r)
 	srv.clients[id] = client
-	srv.log.Info.Println("new client", id)
+	srv.log.Info.Println("open client", id)
 	return client
 }
 
@@ -87,7 +86,7 @@ func (srv *Server) deleteClient(id string) {
 	srv.clientsLock.Lock()
 	defer srv.clientsLock.Unlock()
 
-	srv.log.Info.Println("deleteClient", id)
+	srv.log.Info.Println("close client", id)
 	delete(srv.clients, id)
 	srv.CentralLock.Delete(id)
 	srv.CentralLock.Delete(id + ".io")
@@ -104,7 +103,7 @@ func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	msg, _, err := wsutil.ReadClientData(conn)
 	if err != nil {
-		srv.log.Err.Println("unable to CentralLock initial frame", err)
+		srv.log.Err.Println("unable to read initial frame", err)
 		return
 	}
 	id := string(msg)
@@ -130,6 +129,7 @@ func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) HandleDebug(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	enc := json.NewEncoder(w)
+
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(srv); err != nil {
 		fmt.Fprintln(w, err)
@@ -151,6 +151,7 @@ func (srv *Server) Write(client string, channel string, t string, body interface
 func (srv *Server) Handle(t string, fn MessageHandler) {
 	srv.handlersLock.Lock()
 	defer srv.handlersLock.Unlock()
+
 	srv.handlers[t] = fn
 }
 

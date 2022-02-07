@@ -2,7 +2,6 @@ package websock2
 
 import (
 	"encoding/json"
-	"errors"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"io"
@@ -11,13 +10,12 @@ import (
 
 type Client struct {
 	id       string
+	server   *Server
+	conn     net.Conn
 	r        *wsutil.Reader
 	w        *wsutil.Writer
-	conn     net.Conn
-	state    ws.State
 	enc      *json.Encoder
 	dec      *json.Decoder
-	server   *Server
 	log      *Log
 	channels map[string]*Channel
 	lock     *Lock
@@ -41,19 +39,20 @@ func (c *Client) write(channel string, t string, body interface{}) {
 		}
 		ch.log.Send(resp)
 
-		c.w.Reset(c.conn, c.state, ws.OpText)
-		if err := c.enc.Encode(resp); err != nil {
+		c.w.Reset(c.conn, ws.StateServerSide, ws.OpText)
+		if err := c.enc.Encode(resp); err == nil {
+			if err := c.w.Flush(); err != nil {
+				c.log.Err.Println("unable to flush")
+			}
+		} else {
 			c.log.Err.Println("unable to encode", body)
-		}
-		if err := c.w.Flush(); err != nil {
-			c.log.Err.Println("unable to flush")
 		}
 	} else {
 		c.log.Info.Println("unknown channel", channel)
 	}
 }
 
-func (c *Client) handle(req Message, buf []byte) error {
+func (c *Client) handleAndDispatch(req Message, buf []byte) error {
 	c.server.handlersLock.RLock()
 	defer c.server.handlersLock.RUnlock()
 
@@ -110,26 +109,13 @@ func (c *Client) nextFrame() error {
 	if err := c.dec.Decode(&req); err != nil {
 		return err
 	}
-	if err := c.validateRequest(req.Message); err != nil {
-		return err
-	}
 	channel, ok := c.channels[req.Channel]
 	if !ok {
 		channel = c.newChannel(req.Channel)
 	}
 	channel.IncrementRecv()
 	channel.log.Recv(req.Message)
-	if err := c.handle(req.Message, req.Body); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *Client) validateRequest(req Message) error {
-	if req.Channel == "" {
-		return errors.New("channel must not be empty")
-	}
-	return nil
+	return c.handleAndDispatch(req.Message, req.Body)
 }
 
 func (c *Client) subscribe(channel string, topic string) {
@@ -142,6 +128,7 @@ func (c *Client) subscribe(channel string, topic string) {
 func (c *Client) MarshalJSON() ([]byte, error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
 	data := map[string]interface{}{}
 	channels := make([]*Channel, 0, len(c.channels))
 	for _, ch := range c.channels {
