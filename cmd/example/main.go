@@ -43,10 +43,6 @@ var jiras = map[string]*Jira{}
 var lock sync.Mutex
 
 func backgroundJiraDemo(ws *websock.Server) {
-	http.HandleFunc("x", func(writer http.ResponseWriter, request *http.Request) {
-
-	})
-
 	for {
 		time.Sleep(5 * time.Second)
 		lock.Lock()
