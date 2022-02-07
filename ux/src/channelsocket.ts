@@ -1,13 +1,10 @@
 import {nanoid} from "nanoid";
 
 export interface Message {
-    client: string
     type: string
     channel?: string
     body: any
 }
-
-const protocolTypes: string[] = ["open", "close"]
 
 class Socket {
     private readonly log: Log
@@ -70,11 +67,7 @@ class Socket {
                 if (m.channel) {
                     this.channels.filter((ch) => ch.id === m.channel)
                         .forEach((ch) => {
-                            if (protocolTypes.filter((x) => x === m.type).length > 0) {
-                                ch.log.info(m.type)
-                            } else {
-                                ch.log.send(m)
-                            }
+                            ch.log.send(m)
                         })
                 } else {
                     this.log.send(m)
@@ -92,7 +85,7 @@ class Socket {
     }
 
     send(m: Message) {
-        this.queue.push({...m, client: this.id})
+        this.queue.push(m)
         this.drain()
     }
 
