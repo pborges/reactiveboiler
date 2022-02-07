@@ -21,7 +21,9 @@ func main() {
 	srv := websock.NewServer(log.Writer(), log.Flags())
 	//srv.CentralLock.Log = log.Default()
 
-	srv.Handle("jira.get", jiraGet)
+	srv.Handle("jira.get", func(req websock.Request, rw *websock.ResponseWriter) {
+		go jiraGet(req, rw)
+	})
 	go backgroundJiraDemo(srv)
 
 	http.HandleFunc("/clients", srv.HandleDebug)
@@ -62,16 +64,22 @@ func jiraGet(req websock.Request, rw *websock.ResponseWriter) {
 			return
 		}
 
-		if _, ok := jiras[issue]; !ok {
+		var jira Jira
+		lock.Lock()
+		if j, ok := jiras[issue]; ok {
+			jira = *j
+		} else {
+			lock.Unlock()
+			time.Sleep(3 * time.Second)
 			lock.Lock()
 			jiras[issue] = &Jira{
 				Issue:       issue,
 				Description: "do work",
 			}
-			lock.Unlock()
+			jira = *jiras[issue]
 		}
-		lock.Lock()
-		rw.Write("jira", jiras[issue])
 		lock.Unlock()
+
+		rw.Write("jira", jira)
 	}
 }

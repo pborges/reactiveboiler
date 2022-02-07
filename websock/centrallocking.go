@@ -39,35 +39,39 @@ func (c *CentralLocking) CreateLock(key string) *Lock {
 }
 
 func (l *Lock) Lock() {
-	l.self.Lock()
-	defer l.self.Unlock()
 	l.parent.log("lock " + l.Key)
 	l.rwlock.Lock()
+
+	l.self.Lock()
 	l.WLock = true
+	l.self.Unlock()
 }
 
 func (l *Lock) Unlock() {
-	l.self.Lock()
-	defer l.self.Unlock()
 	l.parent.log("unlock " + l.Key)
 	l.rwlock.Unlock()
+
+	l.self.Lock()
 	l.WLock = false
+	l.self.Unlock()
 }
 
 func (l *Lock) RLock() {
-	l.self.Lock()
-	defer l.self.Unlock()
 	l.parent.log("rlock " + l.Key)
 	l.rwlock.RLock()
+
+	l.self.Lock()
 	l.RLocks++
+	l.self.Unlock()
 }
 
 func (l *Lock) RUnlock() {
-	l.self.Lock()
-	defer l.self.Unlock()
 	l.parent.log("runlock " + l.Key)
 	l.rwlock.RUnlock()
+
+	l.self.Lock()
 	l.RLocks--
+	l.self.Unlock()
 }
 
 func (c *CentralLocking) Delete(key string) {

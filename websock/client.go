@@ -26,6 +26,8 @@ func (c *Client) error(channel string, err error) {
 	c.write(channel, "error", err.Error())
 }
 func (c *Client) write(channel string, t string, body interface{}) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	c.iolock.Lock()
 	defer c.iolock.Unlock()
 
