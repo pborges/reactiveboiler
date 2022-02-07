@@ -44,10 +44,10 @@ func (c *Client) write(channel string, t string, body interface{}) {
 		c.w.Reset(c.conn, ws.StateServerSide, ws.OpText)
 		if err := c.enc.Encode(resp); err == nil {
 			if err := c.w.Flush(); err != nil {
-				c.log.Err.Println("unable to flush")
+				c.log.Err.Println("unable to flush", err)
 			}
 		} else {
-			c.log.Err.Println("unable to encode", body)
+			c.log.Err.Println("unable to encode", body, err)
 		}
 	} else {
 		c.log.Info.Println("unknown channel", channel)
