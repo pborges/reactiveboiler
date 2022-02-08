@@ -65,16 +65,18 @@ func (c *Client) handleAndDispatch(req Message, buf []byte) error {
 
 	if ok {
 		if fn != nil {
-			r := Request{
-				client:  c,
-				channel: req.Channel,
-				Raw:     buf,
-			}
-			rw := &ResponseWriter{
-				client:  c,
-				channel: req.Channel,
-			}
-			fn(r, rw)
+			go func() {
+				r := Request{
+					client:  c,
+					channel: req.Channel,
+					Raw:     buf,
+				}
+				rw := &ResponseWriter{
+					client:  c,
+					channel: req.Channel,
+				}
+				fn(r, rw)
+			}()
 		}
 	} else {
 		c.log.Err.Println("unknown type", req.Type)
@@ -111,7 +113,11 @@ func (c *Client) nextFrame() error {
 	if err := c.dec.Decode(&req); err != nil {
 		return err
 	}
+
+	c.lock.RLock()
 	channel, ok := c.channels[req.Channel]
+	c.lock.RUnlock()
+
 	if !ok {
 		channel = c.newChannel(req.Channel)
 	}
