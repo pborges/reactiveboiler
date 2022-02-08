@@ -1,4 +1,4 @@
-package websock
+package websock2
 
 import "encoding/json"
 

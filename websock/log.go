@@ -12,25 +12,24 @@ const SymbolErr = "!!"
 const SymbolSend = ">>"
 const SymbolRecv = "<<"
 
-func NewLog(out io.Writer, logFlags int, client string, channel string) *Log {
-	newLog := func(symbol, client, channel string) *log.Logger {
-		var identifier string
-		if channel != "" {
-			identifier = fmt.Sprintf("[%s -> %s]", client, channel)
-		} else if client != "" {
-			identifier = fmt.Sprintf("[%s]", client)
-		}
-		return log.New(out, fmt.Sprintf("[WS %s]%s ", symbol, identifier), logFlags)
-	}
-
+func NewLog(out io.Writer, logFlags int, client string) *Log {
 	return &Log{
 		Writer: out,
 		Flags:  logFlags,
-		Info:   newLog(SymbolInfo, client, channel),
-		Err:    newLog(SymbolErr, client, channel),
-		send:   newLog(SymbolSend, client, channel),
-		recv:   newLog(SymbolRecv, client, channel),
+		client: client,
+		Info:   newLog(out, logFlags, SymbolInfo, client, ""),
+		Err:    newLog(out, logFlags, SymbolErr, client, ""),
 	}
+}
+
+func newLog(out io.Writer, logFlags int, symbol string, client string, channel string) *log.Logger {
+	var identifier string
+	if channel != "" {
+		identifier = fmt.Sprintf("[%s -> %s]", client, channel)
+	} else if client != "" {
+		identifier = fmt.Sprintf("[%s]", client)
+	}
+	return log.New(out, fmt.Sprintf("[WS %s]%s ", symbol, identifier), logFlags)
 }
 
 type Log struct {
@@ -38,22 +37,25 @@ type Log struct {
 	Flags  int
 	Info   *log.Logger
 	Err    *log.Logger
+	client string
 	send   *log.Logger
 	recv   *log.Logger
 }
 
-func (l Log) Send(m Message) {
+func (l Log) Send(m OutboundMessage) {
 	var buf []byte
 	if m.Body != nil {
 		buf, _ = json.Marshal(m.Body)
 	}
-	l.send.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
+	newLog(l.Writer, l.Flags, SymbolSend, l.client, m.Channel).
+		Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
 }
 
-func (l Log) Recv(m Message) {
+func (l Log) Recv(m InboundMessage) {
 	var buf []byte
 	if m.Body != nil {
 		buf, _ = json.Marshal(m.Body)
 	}
-	l.recv.Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
+	newLog(l.Writer, l.Flags, SymbolRecv, l.client, m.Channel).
+		Output(2, fmt.Sprintf("%s %s", m.Type, string(buf)))
 }

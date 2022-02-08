@@ -2,17 +2,39 @@ package websock
 
 import "encoding/json"
 
-type MessageHandler func(req Request, rw *ResponseWriter)
+type InboundMessage struct {
+	Channel string          `json:"channel"`
+	Type    string          `json:"type"`
+	Body    json.RawMessage `json:"body"`
+}
+
+type OutboundMessage struct {
+	Channel string      `json:"channel"`
+	Type    string      `json:"type"`
+	Body    interface{} `json:"body"`
+}
+
+type PublishMessage struct {
+	Topic string
+	Type  string      `json:"type"`
+	Body  interface{} `json:"body"`
+}
+
+type MessageHandlerFunc func(r Request, rw ResponseWriter)
 
 type Request struct {
-	client  *Client
-	channel string
+	msg     InboundMessage
+	writeCh chan<- OutboundMessage
 	Raw     []byte
 }
 
 func (r Request) Unpack(dst interface{}) bool {
 	if err := json.Unmarshal(r.Raw, dst); err != nil {
-		r.client.error(r.channel, err)
+		r.writeCh <- OutboundMessage{
+			Channel: r.msg.Channel,
+			Type:    "error",
+			Body:    err.Error(),
+		}
 		return false
 	}
 	return true
@@ -25,18 +47,26 @@ type Message struct {
 }
 
 type ResponseWriter struct {
-	client  *Client
-	channel string
+	writeCh   chan<- OutboundMessage
+	publishCh chan<- PublishMessage
+	channel   string
+}
+
+func (rw *ResponseWriter) Publish(topic string, t string, body interface{}) {
+	rw.publishCh <- PublishMessage{
+		Topic: topic,
+		Type:  t,
+		Body:  body,
+	}
 }
 
 func (rw *ResponseWriter) Write(t string, body interface{}) {
-	rw.client.server.clientsLock.RLock()
-	defer rw.client.server.clientsLock.RUnlock()
-	rw.client.write(rw.channel, t, body)
+	rw.writeCh <- OutboundMessage{
+		Channel: rw.channel,
+		Type:    t,
+		Body:    body,
+	}
 }
 
 func (rw *ResponseWriter) Error(err error) {
-	rw.client.server.clientsLock.RLock()
-	defer rw.client.server.clientsLock.RUnlock()
-	rw.client.error(rw.channel, err)
 }
