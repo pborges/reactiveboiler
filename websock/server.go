@@ -96,6 +96,7 @@ func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeCh:        writeCh,
 		publishCh:      srv.publishCh,
 		subscriptionCh: make(chan PublishMessage),
+		openRequests:   new(sync.WaitGroup),
 	}
 	srv.addClient <- client
 
@@ -120,6 +121,9 @@ func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		srv.removeClient <- client
+		client.Log.Info.Println("waiting for open requests to finish...")
+		client.openRequests.Wait()
+		srv.log.Info.Println("close", client.id)
 		close(writeCh)
 	}()
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 )
 
 type Client struct {
@@ -16,6 +17,7 @@ type Client struct {
 	writeCh        chan<- OutboundMessage
 	publishCh      chan<- PublishMessage
 	handlerFn      func(t string) (MessageHandlerFunc, bool)
+	openRequests   *sync.WaitGroup
 }
 
 func (c *Client) handle() {
@@ -54,10 +56,14 @@ func (c *Client) handle() {
 }
 
 func (c *Client) dispatch(r Request, rw ResponseWriter) {
+	c.openRequests.Add(1)
 	switch r.msg.Type {
 	case "open":
+		c.openRequests.Done()
 	case "close":
+		c.openRequests.Done()
 	case "subscribe":
+		defer c.openRequests.Done()
 		var topic string
 		if r.Unpack(&topic) {
 			topic = strings.ToLower(topic)
@@ -74,8 +80,12 @@ func (c *Client) dispatch(r Request, rw ResponseWriter) {
 		}
 	default:
 		if fn, ok := c.handlerFn(r.msg.Type); ok {
-			go fn(r, rw)
+			go func() {
+				defer c.openRequests.Done()
+				fn(r, rw)
+			}()
 		} else {
+			defer c.openRequests.Done()
 			c.writeCh <- OutboundMessage{
 				Channel: r.msg.Channel,
 				Type:    "error",

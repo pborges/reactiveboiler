@@ -52,7 +52,7 @@ type ResponseWriter struct {
 	channel   string
 }
 
-func (rw *ResponseWriter) Publish(topic string, t string, body interface{}) {
+func (rw ResponseWriter) Publish(topic string, t string, body interface{}) {
 	rw.publishCh <- PublishMessage{
 		Topic: topic,
 		Type:  t,
@@ -60,7 +60,7 @@ func (rw *ResponseWriter) Publish(topic string, t string, body interface{}) {
 	}
 }
 
-func (rw *ResponseWriter) Write(t string, body interface{}) {
+func (rw ResponseWriter) Write(t string, body interface{}) {
 	rw.writeCh <- OutboundMessage{
 		Channel: rw.channel,
 		Type:    t,
@@ -68,5 +68,10 @@ func (rw *ResponseWriter) Write(t string, body interface{}) {
 	}
 }
 
-func (rw *ResponseWriter) Error(err error) {
+func (rw ResponseWriter) Error(err error) {
+	rw.writeCh <- OutboundMessage{
+		Channel: rw.channel,
+		Type:    "error",
+		Body:    err.Error(),
+	}
 }
