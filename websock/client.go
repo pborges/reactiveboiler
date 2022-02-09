@@ -12,12 +12,23 @@ type Client struct {
 	channels       map[string]*Channel
 	Log            *Log
 	conn           net.Conn
-	readCh         <-chan InboundMessage
 	subscriptionCh chan PublishMessage
+	execCh         chan func()
+	readCh         <-chan InboundMessage
 	writeCh        chan<- OutboundMessage
 	publishCh      chan<- PublishMessage
 	handlerFn      func(t string) (MessageHandlerFunc, bool)
 	openRequests   *sync.WaitGroup
+}
+
+func (c *Client) exec(fn func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	c.execCh <- func() {
+		defer wg.Done()
+		fn()
+	}
+	wg.Wait()
 }
 
 func (c *Client) handle() {
@@ -56,14 +67,10 @@ func (c *Client) handle() {
 }
 
 func (c *Client) dispatch(r Request, rw ResponseWriter) {
-	c.openRequests.Add(1)
 	switch r.msg.Type {
 	case "open":
-		c.openRequests.Done()
 	case "close":
-		c.openRequests.Done()
 	case "subscribe":
-		defer c.openRequests.Done()
 		var topic string
 		if r.Unpack(&topic) {
 			topic = strings.ToLower(topic)
@@ -80,12 +87,12 @@ func (c *Client) dispatch(r Request, rw ResponseWriter) {
 		}
 	default:
 		if fn, ok := c.handlerFn(r.msg.Type); ok {
+			c.openRequests.Add(1)
 			go func() {
 				defer c.openRequests.Done()
 				fn(r, rw)
 			}()
 		} else {
-			defer c.openRequests.Done()
 			c.writeCh <- OutboundMessage{
 				Channel: r.msg.Channel,
 				Type:    "error",

@@ -1,10 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pborges/reactiveboiler/websock2"
+	"github.com/pborges/reactiveboiler/websock"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -18,68 +17,62 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ltime | log.Lshortfile)
 
-	srv := websock2.NewServer(log.Writer(), log.Flags())
+	srv := websock.NewServer()
 	//srv.CentralLock.Log = log.Default()
 
-	srv.Handle("jira.get", func(req websock2.Request, rw *websock2.ResponseWriter) {
-		go jiraGet(req, rw)
+	srv.Handle("object.get", func(req websock.Request, rw websock.ResponseWriter) {
+		go objectGet(req, rw)
 	})
-	go backgroundJiraDemo(srv)
+	go backgroundObjectDemo(srv)
 
-	http.HandleFunc("/clients", srv.HandleDebug)
-	http.HandleFunc("/lock", func(w http.ResponseWriter, r *http.Request) {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		enc.Encode(srv.CentralLock)
-	})
 	http.HandleFunc("/ws", srv.HandleUpgrade)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-type Jira struct {
-	Issue       string `json:"issue"`
+type Object struct {
+	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-var jiras = map[string]*Jira{}
+var objects = map[string]*Object{}
 var lock sync.Mutex
 
-func backgroundJiraDemo(ws *websock2.Server) {
+func backgroundObjectDemo(ws *websock.Server) {
 	for {
 		time.Sleep(5 * time.Second)
 		lock.Lock()
-		for _, jira := range jiras {
-			jira.Description = fmt.Sprintf("%s - %d", jira.Issue, time.Now().Unix())
-			ws.Publish(fmt.Sprintf("jira.%s", jira.Issue), "jira", *jira)
+		for _, obj := range objects {
+			obj.Description = fmt.Sprintf("%s - %d", obj.Name, time.Now().Unix())
+			ws.Publish(fmt.Sprintf("object.%s", obj.Name), "object", *obj)
 		}
 		lock.Unlock()
 	}
 }
 
-func jiraGet(req websock2.Request, rw *websock2.ResponseWriter) {
-	var issue string
-	if req.Unpack(&issue) {
-		if strings.HasPrefix(issue, "foobar") {
-			rw.Error(errors.New("unknown issue: " + issue))
+func objectGet(req websock.Request, rw websock.ResponseWriter) {
+	var name string
+	if req.Unpack(&name) {
+		if strings.HasPrefix(name, "foobar") {
+			rw.Error(errors.New("unknown object: " + name))
 			return
 		}
 
-		var jira Jira
+		var obj Object
 		lock.Lock()
-		if j, ok := jiras[issue]; ok {
-			jira = *j
+		if j, ok := objects[name]; ok {
+			obj = *j
 		} else {
 			lock.Unlock()
 			time.Sleep(3 * time.Second)
 			lock.Lock()
-			jiras[issue] = &Jira{
-				Issue:       issue,
+			objects[name] = &Object{
+				Name:        name,
 				Description: "do work",
 			}
-			jira = *jiras[issue]
+			obj = *objects[name]
 		}
 		lock.Unlock()
 
-		rw.Write("jira", jira)
+		rw.Write("object", obj)
 	}
 }

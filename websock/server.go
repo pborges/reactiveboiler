@@ -18,6 +18,7 @@ func NewServer() *Server {
 		clients:      map[string]*Client{},
 		publishCh:    make(chan PublishMessage),
 		handlers:     map[string]MessageHandlerFunc{},
+		execCh:       make(chan func()),
 	}
 
 	go srv.handle()
@@ -31,6 +32,17 @@ type Server struct {
 	publishCh    chan PublishMessage
 	addClient    chan Client
 	removeClient chan Client
+	execCh       chan func()
+}
+
+func (srv *Server) exec(fn func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	srv.execCh <- func() {
+		defer wg.Done()
+		fn()
+	}
+	wg.Wait()
 }
 
 func (srv *Server) loadHandler(t string) (MessageHandlerFunc, bool) {
@@ -95,6 +107,7 @@ func (srv *Server) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		readCh:         readCh,
 		writeCh:        writeCh,
 		publishCh:      srv.publishCh,
+		execCh:         make(chan func()),
 		subscriptionCh: make(chan PublishMessage),
 		openRequests:   new(sync.WaitGroup),
 	}
